@@ -1,7 +1,7 @@
 import sys, shutil, os
 from gradio_client import Client, handle_file
 n = sys.argv[1]; S = os.environ.get("TRAB", os.path.dirname(os.path.abspath(__file__)))
-c = Client("trellis-community/TRELLIS")
+c = Client("trellis-community/TRELLIS", token=os.environ.get("HF_TOKEN"))
 try: c.predict(api_name="/start_session")
 except Exception as e: print("start_session:", e)
 r = c.predict(image=handle_file(f"{S}/cut/{n}.png"), multiimages=[], seed=0, ss_guidance_strength=7.5,
