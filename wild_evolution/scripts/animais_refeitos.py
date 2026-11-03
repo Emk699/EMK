@@ -1,59 +1,92 @@
-"""Wild Evolution - remodelo de 5 animais no estilo fofo (Blender 4.x/5.x, bpy).
+"""Wild Evolution - remodelo de 5 animais no estilo "Modelos Melhorados" (Blender 4.x/5.x, bpy).
 
 Animais: unicornio, rinoceronte, triceratops, anquilossauro, ourico.
-Referencias de anatomia usadas (fotos/ilustracoes reais):
-  - Unicornio: corpo de cavalo, pescoco longo inclinado ~45 graus, focinho alongado,
-    pernas finas com cascos, chifre espiral na testa, crina ao longo do pescoco.
-  - Rinoceronte: corpo em barril, pernas curtas e grossas, cabeca baixa,
-    chifre grande NA PONTA do nariz + chifre menor atras, dobras de pele no ombro.
-  - Triceratops: cabeca enorme (~1/3 do corpo), gola ossea larga com bordas
-    serrilhadas, 2 chifres longos sobre os olhos apontando para frente,
-    chifre curto no nariz, bico, cauda grossa, patas dianteiras menores.
-  - Anquilossauro: corpo baixo, largo e achatado, costas cobertas de placas
-    (osteodermos) em fileiras, espinhos laterais, cabeca larga com chifrinhos
-    nos cantos, cauda com clava ossea dupla na ponta.
-  - Ourico: corpo redondo, centenas de espinhos cobrindo costas e topo da cabeca,
-    rosto pontudo claro, barriga clara, patinhas curtas.
+Segue a folha de referencia "Modelos Melhorados" enviada pelo usuario:
+  - Unicornio: chibi, cabeca grande, pelo branco perolado, crina e cauda de arco-iris
+    em MECHAS onduladas, chifre espiral dourado, focinho rosado, cascos lilas.
+  - Rinoceronte: pele cinza com textura e manchas, corpo em barril, chifre grande
+    curvo na ponta do nariz + chifre menor, orelhas em tubo, unhas claras.
+  - Triceratops: verde com listras escuras nas costas, barriga clara, gola laranja
+    grande e redonda com anel interno e ESPINHOS EM TODA a borda, 2 chifres longos
+    curvos para frente + 1 no nariz, bico, cauda longa.
+  - Anquilossauro: marrom, costas TODAS cobertas de osteodermos pontudos,
+    espinhos laterais grandes, chifres na cabeca, clava na cauda.
+  - Ourico: rosto creme, centenas de espinhos longos marrons com ponta clara,
+    nariz preto, orelhinhas.
 
-Uso:  python3 animais_refeitos.py [pasta_saida]
+Uso:  python3 animais_refeitos.py          (SO=Ourico para gerar so um)
 Gera: previews/<animal>.png, previews/folha_animais_refeitos.png, export/<animal>.fbx
 """
-import bpy, math, os, sys
+import bpy, math, os
 from mathutils import Vector
 
-OUT = sys.argv[-1] if len(sys.argv) > 1 and os.path.isdir(sys.argv[-1]) else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PREV = os.path.join(OUT, "previews"); EXP = os.path.join(OUT, "export")
 os.makedirs(PREV, exist_ok=True); os.makedirs(EXP, exist_ok=True)
 
-# ---------------------------------------------------------------- utilidades
+# ---------------------------------------------------------------- materiais
 def clear():
     bpy.ops.wm.read_factory_settings(use_empty=True)
-
-_mats = {}
-def mat(name, rgb, rough=0.55, emit=0.0):
-    m = bpy.data.materials.get(name)
-    if m: return m
-    m = bpy.data.materials.new(name); m.use_nodes = True
-    b = m.node_tree.nodes["Principled BSDF"]
-    b.inputs["Base Color"].default_value = (*rgb, 1)
-    b.inputs["Roughness"].default_value = rough
-    if emit:
-        b.inputs["Emission Color"].default_value = (*rgb, 1)
-        b.inputs["Emission Strength"].default_value = emit
-    return m
 
 def hexc(h):
     h = h.lstrip("#"); c = [int(h[i:i+2], 16)/255 for i in (0, 2, 4)]
     return tuple(x/12.92 if x <= 0.04045 else ((x+0.055)/1.055)**2.4 for x in c)
 
+def _set(sock_owner, name, val):
+    if name in sock_owner.inputs: sock_owner.inputs[name].default_value = val
+
+def mat(name, color, rough=0.55, metal=0.0, emit=0.0, bump=0.0, bump_scale=9.0,
+        spots=None, stripes=None, coat=0.0, film=0.0):
+    """spots=(cor2, escala, quantidade 0-1)   stripes=(cor2, escala)"""
+    m = bpy.data.materials.get(name)
+    if m: return m
+    rgb = hexc(color) if isinstance(color, str) else color
+    m = bpy.data.materials.new(name); m.use_nodes = True
+    nt = m.node_tree; N = nt.nodes; L = nt.links
+    b = N["Principled BSDF"]
+    b.inputs["Base Color"].default_value = (*rgb, 1)
+    b.inputs["Roughness"].default_value = rough
+    b.inputs["Metallic"].default_value = metal
+    if emit:
+        b.inputs["Emission Color"].default_value = (*rgb, 1); b.inputs["Emission Strength"].default_value = emit
+    if coat: _set(b, "Coat Weight", coat); _set(b, "Coat Roughness", 0.15)
+    if film: _set(b, "Thin Film Thickness", film); _set(b, "Thin Film IOR", 1.4)
+    tc = N.new("ShaderNodeTexCoord")
+    pattern = spots or stripes
+    if pattern:
+        if spots:
+            t = N.new("ShaderNodeTexNoise"); t.inputs["Scale"].default_value = spots[1]
+            t.inputs["Detail"].default_value = 3
+            lo = 0.62 - 0.12*spots[2]
+        else:
+            t = N.new("ShaderNodeTexWave"); t.wave_type = "BANDS"; t.bands_direction = "Y"
+            t.inputs["Scale"].default_value = stripes[1]; t.inputs["Distortion"].default_value = 4
+            lo = 0.55
+        L.new(tc.outputs["Object"], t.inputs["Vector"])
+        mr = N.new("ShaderNodeMapRange"); mr.inputs[1].default_value = lo; mr.inputs[2].default_value = lo+0.06
+        L.new(t.outputs["Fac"], mr.inputs[0])
+        mix = N.new("ShaderNodeMix"); mix.data_type = "RGBA"
+        mix.inputs[6].default_value = (*rgb, 1)
+        c2 = hexc(pattern[0]); mix.inputs[7].default_value = (*c2, 1)
+        L.new(mr.outputs[0], mix.inputs[0]); L.new(mix.outputs[2], b.inputs["Base Color"])
+    if bump:
+        nz = N.new("ShaderNodeTexNoise"); nz.inputs["Scale"].default_value = bump_scale
+        nz.inputs["Detail"].default_value = 8
+        L.new(tc.outputs["Object"], nz.inputs["Vector"])
+        bp = N.new("ShaderNodeBump"); bp.inputs["Strength"].default_value = bump
+        bp.inputs["Distance"].default_value = 0.03
+        L.new(nz.outputs["Fac"], bp.inputs["Height"]); L.new(bp.outputs["Normal"], b.inputs["Normal"])
+    return m
+
+# ---------------------------------------------------------------- geometria
 def quat_x_to(d):
     return Vector((1, 0, 0)).rotation_difference(d.normalized())
 
-K = 1.35       # metaball com stiffness 2 aparece com ~57% do raio; 1.35 deixa o corpo cheinho sem inchar demais
+K = 1.35   # metaball com stiffness 2 aparece com ~57% do raio; 1.35 deixa o corpo cheinho
 
 class Blob:
     """Metaball: varias esferas/capsulas que se fundem num corpo liso."""
-    def __init__(self, name, material, res=0.035):
+    def __init__(self, name, material, res=0.03):
         self.mb = bpy.data.metaballs.new(name)
         self.mb.resolution = res; self.mb.render_resolution = res
         self.ob = bpy.data.objects.new(name, self.mb)
@@ -69,23 +102,29 @@ class Blob:
         e = self.mb.elements.new(type="CAPSULE"); e.co = (a+b)/2; e.radius = r*K
         e.size_x = (b-a).length/2; e.rotation = quat_x_to(b-a); e.stiffness = stiff; return e
     def to_mesh(self):
-        dg = bpy.context.evaluated_depsgraph_get()
-        me = bpy.data.meshes.new_from_object(self.ob.evaluated_get(dg))
-        name = self.ob.name
-        bpy.data.objects.remove(self.ob); bpy.data.metaballs.remove(self.mb)
-        ob = bpy.data.objects.new(name, me); bpy.context.collection.objects.link(ob)
-        for p in me.polygons: p.use_smooth = True
-        me.materials.append(self.material)
-        return ob
+        return bake(self.ob, self.material, data=self.mb)
+
+def bake(ob, material, data=None):
+    """Converte metaball/curva em malha (para exportar FBX)."""
+    dg = bpy.context.evaluated_depsgraph_get()
+    me = bpy.data.meshes.new_from_object(ob.evaluated_get(dg))
+    name = ob.name; bpy.data.objects.remove(ob)
+    if data is not None:
+        (bpy.data.metaballs if isinstance(data, bpy.types.MetaBall) else bpy.data.curves).remove(data)
+    new = bpy.data.objects.new(name, me); bpy.context.collection.objects.link(new)
+    for p in me.polygons: p.use_smooth = True
+    me.materials.append(material)
+    return new
 
 def prim(kind, loc, scale=(1, 1, 1), rot=(0, 0, 0), material=None, **kw):
     f = {"sphere": bpy.ops.mesh.primitive_uv_sphere_add, "cone": bpy.ops.mesh.primitive_cone_add,
-         "cyl": bpy.ops.mesh.primitive_cylinder_add, "torus": bpy.ops.mesh.primitive_torus_add}[kind]
+         "cyl": bpy.ops.mesh.primitive_cylinder_add, "torus": bpy.ops.mesh.primitive_torus_add,
+         "plane": bpy.ops.mesh.primitive_plane_add}[kind]
     if kind == "sphere": kw.setdefault("segments", 24); kw.setdefault("ring_count", 12)
     if kind in ("cone", "cyl"): kw.setdefault("vertices", 16)
     f(location=loc, rotation=rot, **kw)
     ob = bpy.context.active_object; ob.scale = scale
-    if kind != "torus":
+    if kind not in ("plane",):
         for p in ob.data.polygons: p.use_smooth = True
     if material: ob.data.materials.append(material)
     return ob
@@ -96,32 +135,44 @@ def cone_along(base, tip, r, material, verts=12):
     ob.rotation_mode = "QUATERNION"; ob.rotation_quaternion = Vector((0, 0, 1)).rotation_difference(d.normalized())
     return ob
 
-_horn_id = [0]
-def curved_horn(base, direction, up, length, r, material, bend=0.35, segs=12):
+_uid = [0]
+def uid(p):
+    _uid[0] += 1; return f"{p}{_uid[0]}"
+
+def curved_horn(base, direction, up, length, r, material, bend=0.35, tipr=0.12):
     """Chifre curvo e liso: cadeia de metaballs afinando ate a ponta."""
     base = Vector(base); d = Vector(direction).normalized(); u = Vector(up).normalized()
-    _horn_id[0] += 1
-    b = Blob(f"chifre{_horn_id[0]}", material, res=0.012)
-    segs = max(segs, int(length/(r*0.08)))                   # bolas bem juntas = superficie lisa
+    b = Blob(uid("chifre"), material, res=0.012)
+    segs = max(12, int(length/(r*0.08)))
     for i in range(segs+1):
         t = i/segs
-        b.ball(base + d*length*t + u*length*bend*t*t, r*(1-0.8*t**0.9), stiff=3.0)
+        b.ball(base + d*length*t + u*length*bend*t*t, r*(1-(1-tipr)*t**0.9), stiff=3.0)
     return b.to_mesh()
 
-def eyes(head_c, fwd_off, side, height, r, look=(0, -1, 0)):
-    """Olhos grandes estilo fofo: esfera escura + brilho branco + palpebra leve."""
-    black = mat("olho", hexc("#1b1414"), 0.15); white = mat("brilho", (1, 1, 1), 0.2, emit=1.0)
+def strand(pts, r, material, profile=(0.7, 1.0, 1.0, 0.85, 0.55, 0.15)):
+    """Mecha de cabelo: curva NURBS com espessura variavel (crina/cauda)."""
+    cu = bpy.data.curves.new(uid("mecha"), "CURVE"); cu.dimensions = "3D"
+    cu.bevel_depth = r; cu.bevel_resolution = 4; cu.resolution_u = 10; cu.use_fill_caps = True
+    sp = cu.splines.new("NURBS"); sp.points.add(len(pts)-1)
+    for i, p in enumerate(pts):
+        sp.points[i].co = (*p, 1)
+        t = i/(len(pts)-1); k = t*(len(profile)-1); j = min(int(k), len(profile)-2)
+        sp.points[i].radius = profile[j] + (profile[j+1]-profile[j])*(k-j)
+    sp.use_endpoint_u = True; sp.order_u = 3
+    ob = bpy.data.objects.new(cu.name, cu); bpy.context.collection.objects.link(ob)
+    return bake(ob, material, data=cu)
+
+def eyes(head_c, fwd_off, side, height, r, lids=None):
+    """Olho escuro brilhante + 1 brilho grande + 1 pequeno (igual a referencia)."""
+    black = mat("olho", "#120d0b", 0.08, coat=1.0); white = mat("brilho", (1, 1, 1), 0.2, emit=2.0)
     hc = Vector(head_c)
     for s in (-1, 1):
         c = hc + Vector((s*side, fwd_off, height))
-        prim("sphere", c, (r, r*0.75, r*1.1), material=black)
-        prim("sphere", c + Vector((r*0.25, -r*0.6, r*0.4)), (r*0.28,)*3, material=white)
-        prim("sphere", c + Vector((-r*0.2, -r*0.66, -r*0.35)), (r*0.12,)*3, material=white)
-
-def cheeks(head_c, fwd_off, side, height, r):
-    pink = mat("bochecha", hexc("#ff9fb0"), 0.8)
-    for s in (-1, 1):
-        prim("sphere", Vector(head_c) + Vector((s*side, fwd_off, height)), (r, r*0.4, r*0.6), material=pink)
+        prim("sphere", c, (r, r*0.8, r*1.05), material=black)
+        prim("sphere", c + Vector((r*0.3, -r*0.68, r*0.38)), (r*0.24,)*3, material=white)
+        prim("sphere", c + Vector((-r*0.2, -r*0.74, -r*0.32)), (r*0.1,)*3, material=white)
+        if lids:  # palpebra da cor da pele (deixa o olhar mais natural)
+            lid = prim("sphere", c + Vector((0, 0.02*r, r*0.35)), (r*1.12, r*0.9, r*0.7), material=lids)
 
 def fib_points(n):
     ga = math.pi*(3-math.sqrt(5))
@@ -130,189 +181,206 @@ def fib_points(n):
         yield Vector((math.cos(t)*rr, math.sin(t)*rr, z))
 
 # ---------------------------------------------------------------- animais
+RAINBOW = ["#ff6f91", "#ffa15c", "#ffe066", "#7ed67e", "#5cc8ff", "#a98bff"]
+
 def unicornio():
-    skin = mat("uni_pelo", hexc("#f7f2fb")); hoof = mat("uni_casco", hexc("#c9a8e8"), 0.35)
-    horn = mat("uni_chifre", hexc("#ffd36b"), 0.25); nose = mat("uni_focinho", hexc("#ffd6e4"))
-    b = Blob("uni_corpo", skin)
-    b.ell((0, 0, 0.95), 0.55, 0.62, 0.95, 0.62)              # tronco de cavalo (alongado)
-    b.ball((0, 0.45, 1.0), 0.48)                              # anca
-    b.cap((0, -0.55, 1.15), (0, -0.85, 1.75), 0.26)           # PESCOCO longo, inclinado ~45
-    b.ell((0, -1.0, 2.0), 0.42, 0.85, 1.0, 0.85)              # cabeca
-    b.cap((0, -1.15, 1.95), (0, -1.45, 1.75), 0.22)           # focinho alongado
-    for x in (-0.28, 0.28):
-        for y in (-0.42, 0.5):
-            b.cap((x, y, 0.85), (x, y, 0.22), 0.13)           # pernas finas
-    body = b.to_mesh()
-    for x in (-0.28, 0.28):
-        for y in (-0.42, 0.5):
-            prim("cyl", (x, y, 0.1), (1, 1, 1), material=hoof, radius=0.15, depth=0.2)
-    prim("sphere", (0, -1.52, 1.72), (0.2, 0.14, 0.15), material=nose)
-    # chifre espiral: segmentos conicos sobrepostos (efeito de rosca)
-    base = Vector((0, -1.2, 2.3)); tip = Vector((0, -1.45, 3.0)); n = 7
-    for i in range(n):
-        a0, a1 = base.lerp(tip, i/n), base.lerp(tip, (i+1.25)/n)
-        cone_along(a0, a1, 0.12*(1-i/n)+0.02, horn, 16)
-    # orelhas
+    coat = mat("uni_pelo", "#fbf8ff", 0.35, coat=0.6, film=380)
+    muzzle = mat("uni_focinho", "#ffe3ec", 0.45, coat=0.3)
+    inner = mat("uni_orelha", "#ffb6cc", 0.6)
+    hoof = mat("uni_casco", "#b9a2e8", 0.25, metal=0.2, coat=0.6)
+    horn = mat("uni_chifre", "#f2c14e", 0.28, metal=0.85)
+    b = Blob("uni_corpo", coat)
+    b.ell((0, 0.05, 0.78), 0.5, 0.62, 0.95, 0.62)           # tronco curtinho e redondo (chibi)
+    b.ball((0, 0.38, 0.8), 0.36)                             # anca
+    b.cap((0, -0.3, 0.9), (0, -0.55, 1.35), 0.24)            # pescoco grosso
+    b.ell((0, -0.68, 1.62), 0.5, 0.9, 1.0, 0.92)             # CABECAO
+    for x in (-0.2, 0.2):
+        for y in (-0.3, 0.4):
+            b.cap((x, y, 0.62), (x, y, 0.16), 0.11)           # pernas
+    b.to_mesh()
+    prim("sphere", (0, -1.0, 1.5), (0.24, 0.24, 0.2), material=muzzle)          # focinho rosado
+    nos = mat("uni_narina", "#d9879c", 0.5)
     for s in (-1, 1):
-        cone_along((s*0.2, -0.88, 2.3), (s*0.3, -0.82, 2.62), 0.09, skin)
-    # crina arco-iris ao longo do pescoco e testa + cauda
-    rainbow = ["#ff7b9c", "#ffb36b", "#ffe66b", "#8be08b", "#6bc5ff", "#b28bff"]
-    pts = [Vector((0, -1.05, 2.42)), Vector((0, -0.85, 2.3)), Vector((0, -0.7, 2.0)),
-           Vector((0, -0.55, 1.7)), Vector((0, -0.42, 1.45))]
-    for i, p in enumerate(pts):
-        c = rainbow[i % len(rainbow)]
-        prim("sphere", p + Vector((0, 0.08, 0.05)), (0.15, 0.2, 0.17), material=mat("crina"+c, hexc(c), 0.6))
-        prim("sphere", p + Vector((0.11, 0.12, -0.05)), (0.1, 0.17, 0.14), material=mat("crina"+c, hexc(c), 0.6))
-        prim("sphere", p + Vector((-0.11, 0.12, -0.05)), (0.1, 0.17, 0.14), material=mat("crina"+c, hexc(c), 0.6))
-    tail = [Vector((0, 0.95, 1.15)), Vector((0, 1.15, 1.0)), Vector((0, 1.25, 0.75)), Vector((0, 1.28, 0.5))]
-    for i, p in enumerate(tail):
-        c = rainbow[(i*2) % len(rainbow)]
-        prim("sphere", p, (0.14, 0.17, 0.2), material=mat("crina"+c, hexc(c), 0.6))
-    eyes((0, -1.0, 2.0), -0.22, 0.27, 0.05, 0.12)
-    cheeks((0, -1.0, 2.0), -0.3, 0.3, -0.15, 0.08)
+        prim("sphere", (s*0.09, -1.21, 1.53), (0.035, 0.02, 0.025), material=nos)
+    for x in (-0.2, 0.2):
+        for y in (-0.3, 0.4):
+            prim("cyl", (x, y, 0.09), material=hoof, radius=0.13, depth=0.18)
+    # orelhas com miolo rosa
+    for s in (-1, 1):
+        cone_along((s*0.2, -0.55, 1.88), (s*0.3, -0.5, 2.18), 0.085, coat)
+        cone_along((s*0.205, -0.6, 1.9), (s*0.29, -0.565, 2.12), 0.05, inner)
+    # chifre espiral dourado (segmentos sobrepostos = rosca)
+    base = Vector((0, -0.86, 1.95)); tip = Vector((0, -1.0, 2.6)); n = 12
+    for i in range(n):
+        cone_along(base.lerp(tip, i/n), base.lerp(tip, (i+1.6)/n), 0.095*(1-i/n)+0.02, horn, 20)
+    # CRINA: mechas onduladas de arco-iris caindo pelos dois lados do pescoco
+    r0, r1 = Vector((0, -0.62, 1.98)), Vector((0, -0.18, 1.12)); nroots = 9
+    for i in range(nroots):
+        t = i/(nroots-1); root = r0.lerp(r1, t)
+        col = mat("crina"+RAINBOW[min(int(t*6), 5)], RAINBOW[min(int(t*6), 5)], 0.35, coat=0.4)
+        for s in (-1, 0, 1):
+            L = 0.38 + 0.08*(1-t)
+            pts = [root,
+                   root + Vector((s*0.10, 0.10, 0.06)),
+                   root + Vector((s*0.22, 0.16, -L*0.35)),
+                   root + Vector((s*0.26, 0.12, -L*0.7)),
+                   root + Vector((s*0.18, 0.2, -L))]
+            if s == 0: pts = [p + Vector((0, 0.04, 0.02)) for p in pts[:3]] + [root + Vector((0.05, 0.3, -0.12))]
+            strand(pts, 0.075, col)
+    # topete caindo de lado na testa
+    for s, c in ((-1, RAINBOW[0]), (1, RAINBOW[5])):
+        strand([Vector((0, -0.66, 2.03)), Vector((s*0.08, -0.8, 2.02)), Vector((s*0.2, -0.9, 1.9)),
+                Vector((s*0.24, -0.92, 1.76))], 0.065, mat("crina"+c, c, 0.35, coat=0.4))
+    # CAUDA: mechas grossas em arco
+    for k, c in enumerate(RAINBOW):
+        s = (k-2.5)/2.5
+        strand([Vector((s*0.05, 0.55, 0.95)), Vector((s*0.08, 0.72, 1.08)), Vector((s*0.14, 0.92, 0.95)),
+                Vector((s*0.16, 0.98, 0.65)), Vector((s*0.1, 0.9, 0.42)), Vector((s*0.05, 0.78, 0.38))],
+               0.085, mat("crina"+c, c, 0.35, coat=0.4))
+    eyes((0, -0.68, 1.62), -0.27, 0.25, 0.04, 0.12)
 
 def rinoceronte():
-    skin = mat("rino_pele", hexc("#9b98a3"), 0.75); horn = mat("rino_chifre", hexc("#e4d9c3"), 0.45)
-    dark = mat("rino_escuro", hexc("#6f6b78"), 0.8)
+    skin = mat("rino_pele", "#8f8c92", 0.8, bump=0.12, bump_scale=10, spots=("#7a767d", 9, 0.3))
+    horn = mat("rino_chifre", "#e8dcc0", 0.5, bump=0.15, bump_scale=30)
+    dark = mat("rino_escuro", "#58535a", 0.8)
+    nail = mat("rino_unha", "#efe6d4", 0.4)
     b = Blob("rino_corpo", skin)
-    b.ell((0, 0.1, 0.95), 0.8, 0.9, 1.0, 0.82)                 # corpo em barril
-    b.ball((0, -0.45, 1.05), 0.7)                              # ombro alto
-    b.ell((0, -1.05, 0.85), 0.5, 0.8, 1.0, 0.75)               # cabeca grande e BAIXA
-    b.cap((0, -1.2, 0.75), (0, -1.55, 0.6), 0.32)              # focinho largo
+    b.ell((0, 0.15, 0.95), 0.8, 0.9, 1.05, 0.8)                # corpo em barril
+    b.ball((0, -0.45, 1.08), 0.68)                             # cupim do ombro
+    b.ell((0, -1.0, 0.86), 0.48, 0.78, 1.0, 0.72)              # cabeca baixa
+    b.cap((0, -1.15, 0.78), (0, -1.5, 0.62), 0.3)              # focinho largo
     for x in (-0.42, 0.42):
-        for y in (-0.45, 0.6):
-            b.cap((x, y, 0.7), (x, y, 0.2), 0.24)               # pernas curtas e grossas
+        for y in (-0.45, 0.65):
+            b.cap((x, y, 0.75), (x, y, 0.2), 0.24)              # pernas grossas
     b.to_mesh()
-    for x in (-0.42, 0.42):                                    # dedos/unhas
-        for y in (-0.45, 0.6):
-            for dx in (-0.1, 0, 0.1):
-                prim("sphere", (x+dx, y-0.2, 0.08), (0.07, 0.06, 0.06), material=horn)
-    # chifres: o grande NA PONTA do nariz, curvo para cima; o menor atras
-    curved_horn((0, -1.58, 0.82), (0, -0.3, 1), (0, 1, 0.2), 0.62, 0.18, horn, bend=0.3, segs=9)
-    curved_horn((0, -1.25, 1.05), (0, -0.1, 1), (0, 1, 0), 0.3, 0.13, horn, bend=0.2, segs=7)
+    for x in (-0.42, 0.42):
+        for y in (-0.45, 0.65):
+            for dx in (-0.11, 0, 0.11):
+                prim("sphere", (x+dx, y-0.24, 0.08), (0.075, 0.07, 0.065), material=nail)
+    curved_horn((0, -1.55, 0.82), (0, -0.35, 1), (0, 1, 0.15), 0.7, 0.2, horn, bend=0.35)
+    curved_horn((0, -1.22, 1.05), (0, -0.15, 1), (0, 1, 0), 0.32, 0.14, horn, bend=0.2)
     for s in (-1, 1):                                          # orelhas em tubo
-        cone_along((s*0.3, -0.75, 1.05), (s*0.42, -0.68, 1.4), 0.11, skin)
-        prim("sphere", (s*0.41, -0.7, 1.36), (0.07, 0.04, 0.07), material=dark)
-        prim("sphere", (s*0.17, -1.72, 0.58), (0.05, 0.03, 0.04), material=dark)  # narinas
-    cone_along((0, 0.95, 0.95), (0, 1.25, 0.6), 0.06, skin)
-    prim("sphere", (0, 1.25, 0.6), (0.06, 0.06, 0.1), material=dark)                     # rabinho
-    eyes((0, -1.05, 0.85), -0.25, 0.38, 0.12, 0.1)
-    cheeks((0, -1.05, 0.85), -0.38, 0.38, -0.08, 0.08)
+        e = Blob(uid("orelha"), skin, res=0.015)
+        e.cap((s*0.3, -0.72, 1.12), (s*0.42, -0.62, 1.45), 0.08); e.ball((s*0.43, -0.62, 1.47), 0.09)
+        e.to_mesh()
+        prim("sphere", (s*0.45, -0.68, 1.46), (0.05, 0.03, 0.06), material=dark)
+        prim("sphere", (s*0.15, -1.74, 0.6), (0.045, 0.03, 0.04), material=dark)   # narinas
+    strand([Vector((0, 1.0, 1.05)), Vector((0, 1.15, 0.9)), Vector((0, 1.2, 0.65))], 0.05, skin)
+    eyes((0, -1.0, 0.86), -0.22, 0.4, 0.12, 0.075)
 
 def triceratops():
-    skin = mat("tri_pele", hexc("#7fc46a"), 0.65); belly = mat("tri_barriga", hexc("#d9f0a8"))
-    frill = mat("tri_gola", hexc("#ff9a5c"), 0.6); horn = mat("tri_chifre", hexc("#fff1d6"), 0.4)
-    beak = mat("tri_bico", hexc("#5a6b3a"), 0.4); spot = mat("tri_mancha", hexc("#5fa04e"))
+    skin = mat("tri_pele", "#74b552", 0.6, bump=0.12, bump_scale=18, stripes=("#5f9c45", 1.6))
+    belly = mat("tri_barriga", "#e3efb0", 0.7, bump=0.15, bump_scale=18)
+    frill = mat("tri_gola", "#f39a35", 0.55, bump=0.2, bump_scale=10, spots=("#e5792a", 5, 0.35))
+    ring = mat("tri_anel", "#d9661c", 0.5)
+    spike = mat("tri_espinho", "#ffd166", 0.45)
+    horn = mat("tri_chifre", "#efe2c4", 0.4, bump=0.1, bump_scale=30)
+    beak = mat("tri_bico", "#6e6a5f", 0.4)
     b = Blob("tri_corpo", skin)
-    b.ell((0, 0.2, 0.95), 0.8, 0.95, 1.1, 0.85)                # corpo robusto
-    b.cap((0, 0.9, 1.0), (0, 1.9, 0.6), 0.32)                  # cauda grossa
-    b.ball((0, 2.0, 0.55), 0.14)
-    b.ell((0, -0.95, 1.05), 0.6, 0.95, 1.0, 0.9)               # CABECA ENORME
-    b.cap((0, -1.2, 0.95), (0, -1.6, 0.75), 0.3)               # focinho
+    b.ell((0, 0.25, 0.92), 0.78, 0.95, 1.12, 0.82)             # corpo robusto
+    b.cap((0, 0.95, 0.95), (0, 1.75, 0.6), 0.3)                # cauda longa
+    b.cap((0, 1.75, 0.6), (0, 2.3, 0.4), 0.16)
+    b.ell((0, -0.9, 1.0), 0.58, 0.95, 1.05, 0.88)              # cabeca grande
+    b.cap((0, -1.1, 0.92), (0, -1.5, 0.75), 0.28)              # focinho
     for x in (-0.45, 0.45):
-        b.cap((x, -0.35, 0.75), (x, -0.4, 0.2), 0.2)            # patas dianteiras (menores)
-        b.cap((x, 0.65, 0.8), (x, 0.65, 0.2), 0.26)             # patas traseiras (maiores)
+        b.cap((x, -0.3, 0.72), (x, -0.35, 0.18), 0.2)           # patas dianteiras
+        b.cap((x, 0.7, 0.78), (x, 0.7, 0.18), 0.26)             # patas traseiras
     b.to_mesh()
-    prim("sphere", (0, 0.1, 0.55), (0.6, 0.75, 0.35), material=belly)
-    cone_along((0, -1.62, 0.78), (0, -1.86, 0.62), 0.16, beak)                 # bico
-    # GOLA: escudo largo atras da cabeca, inclinado para tras, com bordas serrilhadas
-    fr = prim("cyl", (0, -0.42, 1.5), material=frill, radius=0.8, depth=0.1, vertices=40)
-    fr.rotation_euler = (math.radians(68), 0, 0); fr.scale = (1.2, 1, 1)   # em pe, virada para frente
-    bpy.context.view_layer.update()
-    mw = fr.matrix_world.copy()
-    for i in range(15):                                        # epoccipitais (bordinhas)
-        a = math.radians(-10 + i*200/14)
-        loc = mw @ Vector((math.cos(a)*0.8, math.sin(a)*0.8, 0))
-        if loc.z < 1.3: continue
-        out = (mw.to_3x3() @ Vector((math.cos(a), math.sin(a), 0))).normalized()
-        cone_along(loc - out*0.05, loc + out*0.22, 0.1, horn, 10)
+    prim("sphere", (0, 0.15, 0.55), (0.6, 0.8, 0.33), material=belly)
+    curved_horn((0, -1.52, 0.86), (0, -1, -0.4), (0, 0, -1), 0.28, 0.13, beak, bend=0.4, tipr=0.25)  # bico
+    # GOLA grande e redonda, em pe atras da cabeca
+    fr = prim("cyl", (0, -0.45, 1.55), material=frill, radius=0.85, depth=0.1, vertices=48)
+    fr.rotation_euler = (math.radians(66), 0, 0); fr.scale = (1.18, 1, 1)
+    bpy.context.view_layer.update(); mw = fr.matrix_world.copy(); R3 = mw.to_3x3()
+    tor = prim("torus", mw @ Vector((0, 0, -0.06)), material=ring, major_radius=0.58, minor_radius=0.05)
+    tor.rotation_euler = fr.rotation_euler; tor.scale = (1.18, 1, 0.6)
+    for i in range(22):                                        # espinhos em TODA a borda
+        a = math.radians(-35 + i*250/21)
+        loc = mw @ Vector((math.cos(a)*0.85, math.sin(a)*0.85, 0))
+        out = (R3 @ Vector((math.cos(a), math.sin(a), 0))).normalized()
+        cone_along(loc - out*0.06, loc + out*0.24, 0.085, spike, 10)
+    # 2 chifres longos curvando para frente + 1 curto no nariz
     for s in (-1, 1):
-        prim("sphere", mw @ Vector((s*0.45, 0.35, 0.07)), (0.17, 0.17, 0.05), material=spot)
-    # 2 chifres LONGOS sobre os olhos, para frente e para cima; 1 curto no nariz
-    for s in (-1, 1):
-        curved_horn((s*0.26, -1.2, 1.3), (s*0.1, -0.8, 0.6), (0, -0.3, 0.6), 0.8, 0.12, horn, bend=0.15, segs=8)
-    curved_horn((0, -1.5, 1.05), (0, -0.3, 1), (0, -1, 0), 0.25, 0.09, horn, bend=0.1)
+        curved_horn((s*0.27, -1.12, 1.32), (s*0.18, -0.75, 0.55), (0, -0.4, 0.6), 0.85, 0.11, horn, bend=0.2)
+    curved_horn((0, -1.45, 1.0), (0, -0.35, 1), (0, -1, 0), 0.24, 0.085, horn, bend=0.15)
     for x in (-0.45, 0.45):
-        for y, z in ((-0.4, 0.08), (0.65, 0.08)):
+        for y in (-0.35, 0.7):
             for dx in (-0.1, 0, 0.1):
-                prim("sphere", (x+dx, y-0.19, z), (0.06, 0.06, 0.06), material=horn)
-    for p in ((0.5, 0.0, 1.45), (-0.5, 0.3, 1.5), (0.3, 0.6, 1.65), (-0.2, -0.1, 1.75)):
-        prim("sphere", p, (0.14, 0.14, 0.05), material=spot).rotation_euler = (0.3, 0.3*p[0], 0)
-    eyes((0, -0.95, 1.05), -0.35, 0.38, 0.12, 0.12)
-    cheeks((0, -0.95, 1.05), -0.5, 0.38, -0.12, 0.08)
+                prim("sphere", (x+dx, y-0.2, 0.08), (0.06, 0.06, 0.055), material=horn)
+    eyes((0, -0.9, 1.0), -0.36, 0.37, 0.12, 0.1)
 
 def anquilossauro():
-    skin = mat("anq_pele", hexc("#c79a5b"), 0.7); belly = mat("anq_barriga", hexc("#f0d9a8"))
-    plate = mat("anq_placa", hexc("#8a5a3a"), 0.5); spike = mat("anq_espinho", hexc("#fff0d2"), 0.4)
+    skin = mat("anq_pele", "#b07c48", 0.7, bump=0.15, bump_scale=16)
+    belly = mat("anq_barriga", "#ecd3a0", 0.7)
+    plate = mat("anq_placa", "#8a5634", 0.5, bump=0.3, bump_scale=25)
+    spike = mat("anq_espinho", "#f3e2be", 0.4)
     b = Blob("anq_corpo", skin)
-    b.ell((0, 0.15, 0.7), 0.85, 1.25, 1.2, 0.6)                # corpo BAIXO, LARGO e achatado
-    b.cap((0, 1.0, 0.65), (0, 2.1, 0.5), 0.22)                 # cauda
-    b.ell((0, -1.05, 0.65), 0.45, 1.2, 0.9, 0.75)              # cabeca larga e baixa
-    b.cap((0, -1.2, 0.6), (0, -1.5, 0.5), 0.25)
-    for x in (-0.65, 0.65):
+    b.ell((0, 0.15, 0.68), 0.85, 1.25, 1.2, 0.6)               # corpo baixo, largo e achatado
+    b.cap((0, 1.0, 0.62), (0, 2.1, 0.45), 0.2)                 # cauda
+    b.ell((0, -1.05, 0.62), 0.45, 1.2, 0.9, 0.75)              # cabeca larga
+    b.cap((0, -1.2, 0.58), (0, -1.5, 0.48), 0.24)
+    for x in (-0.62, 0.62):
         for y in (-0.45, 0.75):
-            b.cap((x, y, 0.5), (x*1.05, y, 0.15), 0.19)         # patas curtinhas
+            b.cap((x, y, 0.5), (x*1.05, y, 0.14), 0.19)
     b.to_mesh()
-    prim("sphere", (0, 0.15, 0.4), (0.85, 1.0, 0.3), material=belly)
-    # CLAVA da cauda: duas bolas laterais grandes + uma central
-    for s in (-1, 1):
-        prim("sphere", (s*0.2, 2.2, 0.5), (0.24, 0.26, 0.19), material=plate)
-    prim("sphere", (0, 2.32, 0.5), (0.18, 0.2, 0.16), material=plate)
-    # OSTEODERMOS: fileiras de placas nas costas (seguem a curva do corpo)
-    rows = [(-0.55, 0.25), (-0.25, 0.37), (0.05, 0.42), (0.35, 0.4), (0.65, 0.32), (0.92, 0.18)]
-    for y, h in rows:
-        cols = (-0.66, -0.33, 0.0, 0.33, 0.66)
-        for x in cols:
-            z = 0.7 + h*(1 - (x/0.95)**2)**0.5 + 0.08
-            cone_along((x, y, z-0.06), (x, y, z+0.1), 0.11, plate, 10)
-    for i, y in enumerate((1.25, 1.55, 1.85)):                 # placas na cauda
+    prim("sphere", (0, 0.15, 0.38), (0.85, 1.0, 0.3), material=belly)
+    for s in (-1, 1):                                          # clava da cauda
+        prim("sphere", (s*0.2, 2.2, 0.45), (0.24, 0.26, 0.19), material=plate)
+    prim("sphere", (0, 2.32, 0.45), (0.18, 0.2, 0.16), material=plate)
+    # OSTEODERMOS cobrindo TODAS as costas (distribuicao uniforme na casca)
+    c = Vector((0, 0.15, 0.68)); R = Vector((0.82, 0.8, 0.42)); n = 0
+    for d in fib_points(520):
+        if d.z < 0.28: continue
+        p = c + Vector((d.x*R.x, d.y*R.y, d.z*R.z))
+        nrm = Vector((d.x/R.x, d.y/R.y, d.z/R.z)).normalized()
+        big = 1.0 + 0.35*(abs(d.x) > 0.6)
+        cone_along(p - nrm*0.02, p + nrm*0.12*big, 0.055*big, plate, 8)
+        n += 1
+    for i, y in enumerate((1.15, 1.42, 1.7, 1.95)):            # placas da cauda
         for s in (-1, 1):
-            cone_along((s*0.12, y, 0.68 - i*0.04), (s*0.22, y, 0.8 - i*0.04), 0.07, plate, 8)
-    # ESPINHOS LATERAIS apontando para fora
-    for y in (-0.5, -0.15, 0.2, 0.55, 0.9):
+            cone_along((s*0.12, y, 0.62 - i*0.05), (s*0.25, y, 0.74 - i*0.05), 0.065, plate, 8)
+    for y in (-0.5, -0.18, 0.15, 0.48, 0.8):                    # espinhos laterais grandes
         for s in (-1, 1):
-            cone_along((s*0.95, y, 0.72), (s*1.3, y + 0.05, 0.68), 0.09, spike, 10)
-    # chifrinhos nos cantos de tras da cabeca (piramidais)
-    for s in (-1, 1):
-        cone_along((s*0.42, -0.85, 0.85), (s*0.65, -0.65, 0.95), 0.1, spike, 6)
-        cone_along((s*0.42, -1.05, 0.72), (s*0.6, -1.0, 0.65), 0.07, spike, 6)
-    eyes((0, -1.05, 0.65), -0.3, 0.36, 0.18, 0.11)
-    cheeks((0, -1.05, 0.65), -0.42, 0.38, -0.05, 0.08)
+            cone_along((s*0.88, y, 0.66), (s*1.3, y + 0.08, 0.62), 0.1, spike, 12)
+    for s in (-1, 1):                                          # chifres da cabeca
+        cone_along((s*0.42, -0.85, 0.82), (s*0.66, -0.62, 0.95), 0.1, spike, 8)
+        cone_along((s*0.42, -1.05, 0.7), (s*0.62, -1.0, 0.62), 0.07, spike, 8)
+    for x, y in ((-0.18, -1.0), (0.18, -1.0), (0, -0.85), (-0.25, -0.82), (0.25, -0.82)):
+        prim("sphere", (x, y, 0.94), (0.1, 0.1, 0.04), material=plate)
+    eyes((0, -1.05, 0.62), -0.3, 0.36, 0.16, 0.085)
+    print("osteodermos:", n)
 
 def ourico():
-    face = mat("our_rosto", hexc("#f1d3ab"), 0.75); quill = mat("our_espinho", hexc("#6b4a33"), 0.6)
-    tip = mat("our_ponta", hexc("#f3e6d2"), 0.6); dark = mat("our_escuro", hexc("#3a2a22"), 0.4)
-    inner = mat("our_base", hexc("#8a6446"), 0.8)
+    face = mat("our_rosto", "#e9cfa4", 0.75, bump=0.15, bump_scale=40)
+    quill = mat("our_espinho", "#5e4030", 0.55); tip = mat("our_ponta", "#f2e6d0", 0.5)
+    inner = mat("our_base", "#7a5640", 0.85, bump=0.3, bump_scale=40)
+    dark = mat("our_nariz", "#1a1210", 0.2, coat=1.0); ear = mat("our_orelha", "#d9a98a", 0.7)
     b = Blob("our_corpo", face)
-    b.ell((0, 0.05, 0.62), 0.6, 1.0, 1.15, 0.95)               # corpo redondo
-    b.ell((0, -0.55, 0.55), 0.38, 1.0, 1.0, 0.95)              # cabeca
-    b.cap((0, -0.75, 0.5), (0, -1.05, 0.42), 0.15)              # focinho pontudo
-    for x in (-0.3, 0.3):
+    b.ell((0, 0.05, 0.6), 0.6, 1.0, 1.15, 0.92)
+    b.ell((0, -0.55, 0.55), 0.38, 1.0, 1.0, 0.95)
+    b.cap((0, -0.75, 0.5), (0, -1.05, 0.42), 0.15)
+    for x in (-0.28, 0.28):
         for y in (-0.3, 0.4):
             b.cap((x, y, 0.3), (x, y - 0.05, 0.06), 0.09)
     b.to_mesh()
-    prim("sphere", (0, -1.1, 0.43), (0.08, 0.07, 0.07), material=dark)          # nariz
-    # manto marrom por baixo dos espinhos
-    prim("sphere", (0, 0.15, 0.72), (0.66, 0.72, 0.6), material=inner)
-    # MUITOS espinhos: ~420 em distribuicao uniforme (fibonacci) sobre o manto,
-    # inclinados para tras como num ourico de verdade, pontas claras.
-    c = Vector((0, 0.15, 0.72)); R = Vector((0.66, 0.72, 0.6)); n = 0
-    for d in fib_points(900):
-        if d.z < -0.05: continue                               # nao na barriga
-        if d.y < -0.55 and d.z < 0.55: continue                # deixa o rosto livre
-        if d.y < -0.8: continue
+    prim("sphere", (0, -1.11, 0.43), (0.075, 0.065, 0.065), material=dark)
+    prim("sphere", (0, 0.15, 0.7), (0.66, 0.72, 0.58), material=inner)
+    c = Vector((0, 0.15, 0.7)); R = Vector((0.66, 0.72, 0.58)); n = 0
+    for d in fib_points(1500):                                  # ~650 espinhos longos
+        if d.z < -0.12: continue
+        if d.y < -0.5 and d.z < 0.6: continue
+        if d.y < -0.82: continue
         p = c + Vector((d.x*R.x, d.y*R.y, d.z*R.z))
         nrm = Vector((d.x/R.x, d.y/R.y, d.z/R.z)).normalized()
-        dirv = (nrm + Vector((0, 0.85, 0.1))).normalized()     # para tras
-        L = 0.3 + 0.08*((n*7919) % 5)/4
-        cone_along(p - dirv*0.04, p + dirv*L*0.72, 0.035, quill, 6)
-        cone_along(p + dirv*L*0.7, p + dirv*L, 0.019, tip, 6)
+        dirv = (nrm + Vector((0, 0.9, 0.05))).normalized()
+        L = 0.36 + 0.12*((n*7919) % 7)/6
+        cone_along(p - dirv*0.04, p + dirv*L*0.68, 0.03, quill, 5)
+        cone_along(p + dirv*L*0.66, p + dirv*L, 0.017, tip, 5)
         n += 1
-    for s in (-1, 1):                                          # orelhinhas
-        prim("sphere", (s*0.3, -0.48, 0.92), (0.1, 0.05, 0.1), material=face)
-    eyes((0, -0.55, 0.55), -0.28, 0.2, 0.1, 0.085)
-    cheeks((0, -0.55, 0.55), -0.33, 0.25, -0.07, 0.06)
-    print("espinhos do ourico:", n*2)
+    for s in (-1, 1):
+        prim("sphere", (s*0.3, -0.45, 0.88), (0.1, 0.05, 0.1), material=ear)
+    eyes((0, -0.55, 0.55), -0.27, 0.21, 0.1, 0.09)
+    print("espinhos do ourico:", n)
 
 ANIMAIS = [("Unicornio", unicornio), ("Rinoceronte", rinoceronte), ("Triceratops", triceratops),
            ("Anquilossauro", anquilossauro), ("Ourico", ourico)]
@@ -320,19 +388,31 @@ ANIMAIS = [("Unicornio", unicornio), ("Rinoceronte", rinoceronte), ("Triceratops
 # ---------------------------------------------------------------- render/export
 def stage(size=640):
     sc = bpy.context.scene
-    sc.render.engine = "CYCLES"; sc.cycles.samples = 48; sc.cycles.use_denoising = True
+    sc.render.engine = "CYCLES"; sc.cycles.samples = 64; sc.cycles.use_denoising = True
     sc.cycles.device = "CPU"
     sc.render.resolution_x = sc.render.resolution_y = size
-    sc.render.film_transparent = False
     sc.view_settings.view_transform = "Standard"
     w = bpy.data.worlds.new("w"); sc.world = w; w.use_nodes = True
-    w.node_tree.nodes["Background"].inputs[0].default_value = (*hexc("#a8dc86"), 1)
-    w.node_tree.nodes["Background"].inputs[1].default_value = 0.9
-    gm = mat("chao", hexc("#9fd67c"), 0.9)
-    prim("cyl", (0, 0, -0.01), material=gm, radius=30, depth=0.02, vertices=48)
-    sun = bpy.data.lights.new("sol", "SUN"); sun.energy = 3.2; sun.angle = math.radians(12)
-    so = bpy.data.objects.new("sol", sun); so.rotation_euler = (math.radians(40), math.radians(-20), math.radians(-35))
+    w.node_tree.nodes["Background"].inputs[0].default_value = (*hexc("#cfe8ff"), 1)
+    w.node_tree.nodes["Background"].inputs[1].default_value = 0.45
+    # piso verde quadriculado (estilo baseplate)
+    g = bpy.data.materials.new("chao"); g.use_nodes = True; N = g.node_tree.nodes; L = g.node_tree.links
+    br = N.new("ShaderNodeTexBrick"); br.offset = 0; br.squash = 1
+    br.inputs["Color1"].default_value = (*hexc("#4fa83a"), 1); br.inputs["Color2"].default_value = (*hexc("#55b03f"), 1)
+    br.inputs["Mortar"].default_value = (*hexc("#2f7a26"), 1)
+    br.inputs["Scale"].default_value = 1; br.inputs["Mortar Size"].default_value = 0.015
+    br.inputs["Brick Width"].default_value = 1.0; br.inputs["Row Height"].default_value = 1.0
+    tc = N.new("ShaderNodeTexCoord"); L.new(tc.outputs["Object"], br.inputs["Vector"])
+    bs = N["Principled BSDF"]; bs.inputs["Roughness"].default_value = 0.7
+    L.new(br.outputs["Color"], bs.inputs["Base Color"])
+    prim("plane", (0, 0, 0), material=g, size=60).rotation_euler = (0, 0, math.radians(20))
+    sun = bpy.data.lights.new("sol", "SUN"); sun.energy = 2.2; sun.angle = math.radians(8)
+    so = bpy.data.objects.new("sol", sun); so.rotation_euler = (math.radians(45), math.radians(-15), math.radians(-50))
     sc.collection.objects.link(so)
+    fill = bpy.data.lights.new("preenchimento", "AREA"); fill.energy = 120; fill.size = 6
+    fo = bpy.data.objects.new("preenchimento", fill); fo.location = (-4, -3, 3)
+    fo.rotation_euler = (Vector((0, 0, 1)) - fo.location).to_track_quat("-Z", "Y").to_euler()
+    sc.collection.objects.link(fo)
 
 def frame(objs):
     mn = Vector((1e9,)*3); mx = Vector((-1e9,)*3)
@@ -341,24 +421,22 @@ def frame(objs):
             w = o.matrix_world @ Vector(v)
             mn = Vector(map(min, mn, w)); mx = Vector(map(max, mx, w))
     ctr = (mn+mx)/2; size = (mx-mn).length
-    cam = bpy.data.cameras.new("cam"); cam.lens = 50
+    cam = bpy.data.cameras.new("cam"); cam.lens = 55
     co = bpy.data.objects.new("cam", cam); bpy.context.scene.collection.objects.link(co)
-    d = size*1.55
-    co.location = ctr + Vector((-1.0, -0.75, 0.6)).normalized()*d
+    co.location = ctr + Vector((-1.0, -0.6, 0.58)).normalized()*size*1.45
     co.rotation_euler = (ctr - co.location).to_track_quat("-Z", "Y").to_euler()
     bpy.context.scene.camera = co
 
 def main():
     from PIL import Image, ImageDraw, ImageFont
-    tiles = []
-    only = os.environ.get("SO")
+    tiles = []; only = os.environ.get("SO")
     for nome, fn in ANIMAIS:
         if only and only.lower() not in nome.lower(): continue
         clear(); fn()
-        objs = [o for o in bpy.context.scene.objects if o.type == "MESH"]
+        objs = [o for o in bpy.context.scene.objects if o.type == "MESH" and not o.hide_render]
+        for o in [o for o in bpy.context.scene.objects if o.hide_render]: bpy.data.objects.remove(o)
         tris = sum(sum(len(p.vertices)-2 for p in o.data.polygons) for o in objs)
         print(f"{nome}: {len(objs)} pecas, {tris} triangulos")
-        # export (antes do cenario) - FBX para importar no Roblox Studio
         for o in objs: o.select_set(True)
         bpy.ops.export_scene.fbx(filepath=os.path.join(EXP, nome.lower()+".fbx"), use_selection=True,
                                  apply_scale_options="FBX_SCALE_ALL", object_types={"MESH"})
@@ -367,13 +445,16 @@ def main():
         bpy.context.scene.render.filepath = path; bpy.ops.render.render(write_still=True)
         tiles.append((nome, path))
     if only: return
-    W = 640; sheet = Image.new("RGB", (W*3, W*2 + 60), (168, 220, 134)); dr = ImageDraw.Draw(sheet)
-    try: font = ImageFont.truetype("DejaVuSans-Bold.ttf", 34)
-    except Exception: font = ImageFont.load_default()
-    dr.text((20, 12), "Wild Evolution - animais refeitos com referencia (previa)", fill=(30, 50, 30), font=font)
+    W = 640; sheet = Image.new("RGB", (W*3, W*2 + 60), (160, 214, 128)); dr = ImageDraw.Draw(sheet)
+    try:
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 34)
+    except Exception:
+        font = ImageFont.load_default()
+    dr.text((20, 12), "Wild Evolution - Modelos Melhorados", fill=(20, 40, 20), font=font)
     for i, (nome, p) in enumerate(tiles):
         im = Image.open(p); x, y = (i % 3)*W, 60 + (i//3)*W
-        sheet.paste(im, (x, y)); dr.text((x+20, y+W-50), nome, fill=(25, 40, 25), font=font)
+        sheet.paste(im, (x, y)); dr.text((x+20, y+W-50), nome, fill=(15, 30, 15), font=font)
     sheet.save(os.path.join(PREV, "folha_animais_refeitos.png"))
 
-main()
+if __name__ == "__main__":
+    main()
