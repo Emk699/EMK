@@ -44,6 +44,32 @@ if tris > max_tris:
     bpy.ops.object.modifier_apply(modifier=d.name)
 bpy.ops.object.shade_smooth()
 
+# pinta projetando a imagem de referencia (IMG=recorte_sem_fundo.png), vista de -Y,
+# cabeca para +X (orientacao em que o Hunyuan3D devolve o modelo)
+IMG = os.environ.get("IMG")
+if IMG:
+    import numpy as np
+    from PIL import Image
+    im = Image.open(IMG).convert("RGBA"); W, H = im.size
+    a = np.asarray(im).astype(np.float32)/255.0
+    x0, y0, x1, y1 = im.getbbox()
+    rgb = a[..., :3]*(a[..., 3:] > 0.5); w = (a[..., 3] > 0.5).astype(np.float32)
+    for _ in range(60):                     # preenche o fundo com a cor opaca mais proxima
+        if w.min() > 0: break
+        acc = np.zeros_like(rgb); cnt = np.zeros_like(w)
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            acc += np.roll(np.roll(rgb*w[..., None], dx, 1), dy, 0); cnt += np.roll(np.roll(w, dx, 1), dy, 0)
+        new = (w == 0) & (cnt > 0)
+        rgb[new] = acc[new]/cnt[new][:, None]; w[new] = 1
+    me = ob.data
+    co = np.empty(len(me.vertices)*3, np.float32); me.vertices.foreach_get("co", co); co = co.reshape(-1, 3)
+    mnx, mxx, mnz, mxz = co[:, 0].min(), co[:, 0].max(), co[:, 2].min(), co[:, 2].max()
+    u = x0 + (co[:, 0]-mnx)/(mxx-mnx)*(x1-1-x0); v = y0 + (mxz-co[:, 2])/(mxz-mnz)*(y1-1-y0)
+    cols = rgb[v.astype(int).clip(0, H-1), u.astype(int).clip(0, W-1)]
+    for c in list(me.color_attributes): me.color_attributes.remove(c)
+    ca = me.color_attributes.new("Cor", "BYTE_COLOR", "POINT")
+    ca.data.foreach_set("color_srgb", np.hstack([cols, np.ones((len(cols), 1), np.float32)]).ravel())
+
 # escala, centraliza e apoia no chao
 bb = [ob.matrix_world @ Vector(c) for c in ob.bound_box]
 mn = Vector([min(v[i] for v in bb) for i in range(3)]); mx = Vector([max(v[i] for v in bb) for i in range(3)])
@@ -57,7 +83,7 @@ if attrs:
     m = bpy.data.materials.new(nome+"_cor"); m.use_nodes = True
     N = m.node_tree.nodes; b = N["Principled BSDF"]; b.inputs["Roughness"].default_value = 0.6
     a = N.new("ShaderNodeVertexColor"); a.layer_name = attrs[0].name
-    g = N.new("ShaderNodeGamma"); g.inputs["Gamma"].default_value = 2.2   # cor veio em sRGB
+    g = N.new("ShaderNodeGamma"); g.inputs["Gamma"].default_value = 1.0 if IMG else 2.2   # cor do TripoSR vem em sRGB
     m.node_tree.links.new(a.outputs["Color"], g.inputs["Color"]); m.node_tree.links.new(g.outputs["Color"], b.inputs["Base Color"])
     ob.data.materials.clear(); ob.data.materials.append(m)
 
