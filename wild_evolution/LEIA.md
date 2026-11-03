@@ -10,3 +10,7 @@ unicórnio, rinoceronte, tricerátops, anquilossauro e ouriço.
   (precisa do Blender/bpy; `SO=Ourico` gera só um animal)
 
 Feito numa sessão na nuvem, sem acesso ao `cute_real.py` do PC: o estilo foi copiado da prévia `folha_animais2.png`.
+
+## Arbusto de frutinhas
+- `previews/arbusto.png`, `export/arbusto.fbx` (9 peças agrupadas por material, ~37 mil triângulos)
+- `scripts/arbusto.py` gera de novo. No Studio, ligue `DoubleSided` nas MeshParts das folhas.
